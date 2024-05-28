@@ -1,6 +1,5 @@
 import argv
 import gleam/bytes_builder
-import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
@@ -14,6 +13,7 @@ import gleam/string
 import mist.{type Connection, type ResponseData}
 
 import dice
+import dice/parser as dice_parser
 
 pub fn main() {
   case argv.load().arguments {
@@ -24,15 +24,23 @@ pub fn main() {
 
 type ErrorKind {
   RequestError
-  ParseError
+  ParseError(dice_parser.ParseError)
 }
 
-fn run_cli(expression: List(String)) {
-  expression
-  |> string.join(" ")
-  |> dice.roll_dice
-  |> result.map(int.to_string)
-  |> result.lazy_unwrap(fn() { "Error parsing die roll expression" })
+fn run_cli(args: List(String)) {
+  {
+    use expression <- try(
+      args
+      |> string.join(" ")
+      |> dice_parser.parse_dice
+      |> result.map_error(dice_parser.parse_error_message),
+    )
+    expression
+    |> dice.roll_dice
+    |> int.to_string
+    |> Ok
+  }
+  |> result.unwrap_both
   |> io.println
 }
 
@@ -55,8 +63,8 @@ fn run_server() -> Nil {
               |> result.replace_error(RequestError),
             )
             use _ <- try(
-              dice.parse_expression(expression)
-              |> result.replace_error(ParseError),
+              dice_parser.parse_dice(expression)
+              |> result.map_error(ParseError),
             )
             Ok(Nil)
           }
@@ -65,18 +73,18 @@ fn run_server() -> Nil {
               response.new(200)
               |> set_response_json(json.object([#("valid", json.bool(True))]))
             Error(RequestError) ->
-              response.new(400)
+              http_error(400, "missing or invalid expression parameter")
+            Error(ParseError(error)) ->
+              response.new(200)
               |> set_response_json(
                 json.object([
+                  #("valid", json.bool(False)),
                   #(
-                    "error",
-                    json.string("missing or invalid expression parameter"),
+                    "message",
+                    json.string(dice_parser.parse_error_message(error)),
                   ),
                 ]),
               )
-            Error(ParseError) ->
-              response.new(200)
-              |> set_response_json(json.object([#("valid", json.bool(False))]))
           }
         }
         ["roll-dice"] -> {
@@ -85,12 +93,15 @@ fn run_server() -> Nil {
               request.get_query(req)
               |> result.replace_error(RequestError),
             )
-            use expression <- try(
+            use input <- try(
               list.key_find(params, "expression")
               |> result.replace_error(RequestError),
             )
-            dice.roll_dice(expression)
-            |> result.replace_error(ParseError)
+            use expression <- try(
+              dice_parser.parse_dice(input)
+              |> result.map_error(ParseError),
+            )
+            Ok(dice.roll_dice(expression))
           }
           case result {
             Ok(result) ->
@@ -103,20 +114,9 @@ fn run_server() -> Nil {
                 |> mist.Bytes,
               )
             Error(RequestError) ->
-              response.new(400)
-              |> set_response_json(
-                json.object([
-                  #(
-                    "error",
-                    json.string("missing or invalid expression parameter"),
-                  ),
-                ]),
-              )
-            Error(ParseError) ->
-              response.new(400)
-              |> set_response_json(
-                json.object([#("error", json.string("invalid expression"))]),
-              )
+              http_error(400, "missing or invalid expression parameter")
+            Error(ParseError(error)) ->
+              http_error(400, dice_parser.parse_error_message(error))
           }
         }
         _ -> http_error(404, "not found")
