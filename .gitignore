@@ -1,0 +1,11 @@
+/public/main.js
+
+# Gleam stuff
+*.beam
+*.ez
+/build
+erl_crash.dump
+
+# Elm stuff
+elm-stuff
+repl-temp-*
