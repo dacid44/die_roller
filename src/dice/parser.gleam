@@ -1,6 +1,8 @@
 import gleam/int
+import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/pair
 import gleam/result
 import gleam/string
 
@@ -22,6 +24,9 @@ pub type ParseErrorKind {
   NotADigit
   MissingOperator
   IncompleteTerm
+  TrailingOperator
+  UnclosedParen
+  ExtraClosingParen
 }
 
 pub fn parse_error_kind_message(error_kind: ParseErrorKind) -> String {
@@ -30,6 +35,9 @@ pub fn parse_error_kind_message(error_kind: ParseErrorKind) -> String {
     NotADigit -> "a character was expected to be a digit, but was not"
     MissingOperator -> "missing an operator between two terms"
     IncompleteTerm -> "incomplete term"
+    TrailingOperator -> "unused trailing operator"
+    UnclosedParen -> "unclosed parentheses"
+    ExtraClosingParen -> "extra closing parentheses"
   }
 }
 
@@ -56,15 +64,30 @@ fn consume_term(
   position: Int,
   terms: List(Term),
   sign: Sign,
+  needs_closing_paren: Bool,
   state: TermParseState,
-) -> Result(List(Term), ParseError) {
+) -> Result(#(List(Term), Int), ParseError) {
   let #(head, tail) = split_term_head(input)
   case state, head {
     ParseStart, Ok(digit) ->
-      consume_term(tail, position + 1, terms, sign, ParseConstant(digit))
+      consume_term(
+        tail,
+        position + 1,
+        terms,
+        sign,
+        needs_closing_paren,
+        ParseConstant(digit),
+      )
     ParseStart, Error("") -> Error(ParseError(position, EndOfExpression))
     ParseStart, Error("d") ->
-      consume_term(tail, position + 1, terms, sign, ParseDie(1, None))
+      consume_term(
+        tail,
+        position + 1,
+        terms,
+        sign,
+        needs_closing_paren,
+        ParseDie(1, None),
+      )
     ParseStart, Error(_) -> Error(ParseError(position, NotADigit))
 
     ParseConstant(num), Ok(digit) ->
@@ -73,11 +96,26 @@ fn consume_term(
         position + 1,
         terms,
         sign,
+        needs_closing_paren,
         ParseConstant(num * 10 + digit),
       )
-    ParseConstant(num), Error("") -> finish_terms([dice.Constant(num), ..terms])
+    ParseConstant(num), Error("") ->
+      consume_expression(
+        input,
+        position,
+        [dice.Constant(num), ..terms],
+        None,
+        needs_closing_paren,
+      )
     ParseConstant(num), Error("d") ->
-      consume_term(tail, position + 1, terms, sign, ParseDie(num, None))
+      consume_term(
+        tail,
+        position + 1,
+        terms,
+        sign,
+        needs_closing_paren,
+        ParseDie(num, None),
+      )
     ParseConstant(num), Error(_) ->
       consume_expression(
         input,
@@ -89,6 +127,7 @@ fn consume_term(
           ..terms
         ],
         None,
+        needs_closing_paren,
       )
 
     ParseDie(count, value), Ok(digit) ->
@@ -97,19 +136,18 @@ fn consume_term(
         position + 1,
         terms,
         sign,
+        needs_closing_paren,
         ParseDie(count, Some(option.unwrap(value, 0) * 10 + digit)),
       )
     ParseDie(_, None), Error("") -> Error(ParseError(position, EndOfExpression))
-    ParseDie(count, Some(value)), Error("") ->
-      finish_terms([dice.Die(count, value, sign), ..terms])
-    ParseDie(count, None), Error(_) ->
-      Error(ParseError(position, IncompleteTerm))
+    ParseDie(_, None), Error(_) -> Error(ParseError(position, IncompleteTerm))
     ParseDie(count, Some(value)), Error(_) ->
       consume_expression(
         input,
         position,
         [dice.Die(count, value, sign), ..terms],
         None,
+        needs_closing_paren,
       )
   }
 }
@@ -119,33 +157,87 @@ fn consume_expression(
   position: Int,
   terms: List(Term),
   sign: Option(Sign),
-) -> Result(List(Term), ParseError) {
+  needs_closing_paren: Bool,
+) -> Result(#(List(Term), Int), ParseError) {
   let #(head, tail) =
     input
     |> string.pop_grapheme
     |> result.unwrap(#("", ""))
   case sign, head {
-    None, "" -> finish_terms(terms)
-    Some(_), "" -> Error(ParseError(position, EndOfExpression))
+    None, "" ->
+      case needs_closing_paren {
+        True -> Error(ParseError(position, UnclosedParen))
+        False -> finish_terms(terms, position)
+      }
+    Some(_), "" -> Error(ParseError(position, TrailingOperator))
 
-    _, " " -> consume_expression(tail, position + 1, terms, sign)
+    _, " " ->
+      consume_expression(tail, position + 1, terms, sign, needs_closing_paren)
 
     None, "+" | Some(Positive), "+" | Some(Negative), "-" ->
-      consume_expression(tail, position + 1, terms, Some(Positive))
+      consume_expression(
+        tail,
+        position + 1,
+        terms,
+        Some(Positive),
+        needs_closing_paren,
+      )
     None, "-" | Some(Positive), "-" | Some(Negative), "+" ->
-      consume_expression(tail, position + 1, terms, Some(Negative))
+      consume_expression(
+        tail,
+        position + 1,
+        terms,
+        Some(Negative),
+        needs_closing_paren,
+      )
+
+    Some(sign), "(" -> {
+      case consume_expression(tail, position + 1, [], Some(Positive), True) {
+        Error(error) -> Error(error)
+        Ok(#(subexpression, new_position)) ->
+          consume_expression(
+            string.drop_left(input, new_position - position),
+            new_position,
+            [dice.Parens(subexpression, sign), ..terms],
+            None,
+            needs_closing_paren,
+          )
+      }
+    }
+    Some(_), ")" -> Error(ParseError(position, TrailingOperator))
+    None, ")" ->
+      case needs_closing_paren {
+        True -> finish_terms(terms, position + 1)
+        False -> Error(ParseError(position, ExtraClosingParen))
+      }
+
+    Some(sign), _ ->
+      consume_term(
+        input,
+        position,
+        terms,
+        sign,
+        needs_closing_paren,
+        ParseStart,
+      )
 
     None, _ -> Error(ParseError(position, MissingOperator))
-    Some(sign), _ -> consume_term(input, position, terms, sign, ParseStart)
   }
 }
 
-fn finish_terms(terms: List(Term)) -> Result(List(Term), ParseError) {
-  terms
-  |> list.reverse
+fn finish_terms(
+  terms: List(Term),
+  position: Int,
+) -> Result(#(List(Term), Int), ParseError) {
+  #(
+    terms
+      |> list.reverse,
+    position,
+  )
   |> Ok
 }
 
 pub fn parse_dice(input: String) -> Result(List(Term), ParseError) {
-  consume_expression(input, 0, [], Some(Positive))
+  consume_expression(input, 0, [], Some(Positive), False)
+  |> result.map(pair.first)
 }

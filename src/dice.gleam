@@ -2,14 +2,15 @@ import gleam/int
 import gleam/list
 import prng/random
 
-pub type Term {
-  Constant(value: Int)
-  Die(count: Int, size: Int, sign: Sign)
-}
-
 pub type Sign {
   Positive
   Negative
+}
+
+pub type Term {
+  Constant(value: Int)
+  Die(count: Int, size: Int, sign: Sign)
+  Parens(terms: List(Term), sign: Sign)
 }
 
 pub fn negate_if(value: Int, condition: Bool) -> Int {
@@ -29,6 +30,11 @@ fn eval_term(term: Term) -> Int {
       |> int.sum
       |> negate_if(sign == Negative)
     }
+    Parens(terms, sign) ->
+      terms
+      |> list.map(eval_term)
+      |> int.sum
+      |> negate_if(sign == Negative)
   }
 }
 
