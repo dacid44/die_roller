@@ -1,8 +1,10 @@
 module Main exposing (main)
 
+import Api
 import Browser
 import Html exposing (..)
 import Http
+import Maybe.Extra as Maybe
 import Result.Extra as Result
 import Theme
 import Url.Builder as UrlBuilder
@@ -10,20 +12,21 @@ import W.Button as Button
 import W.Container as Container
 import W.Heading as Heading
 import W.InputText as InputText
+import W.Message as Message
 import W.Styles
 import W.Text as Text
 
 
 type alias Model =
     { expression : String
-    , expressionIsValid : Bool
+    , expressionError : Maybe String
     , result : Maybe String
     }
 
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { expression = "", expressionIsValid = True, result = Nothing }, Cmd.none )
+    ( { expression = "", expressionError = Nothing, result = Nothing }, Cmd.none )
 
 
 view : Model -> Browser.Document Msg
@@ -37,37 +40,48 @@ view model =
             , strategy = Theme.systemStrategy
             }
         , Container.view
-            [ Container.vertical
+            [ Container.horizontal
             , Container.pad_4
             , Container.gap_3
             , Container.background Theme.baseBackground
+            , Container.largeScreen
+                []
             , Container.styleAttrs [ ( "height", "100%" ) ]
             ]
-            ([ Heading.view [] [ text "Die Roller" ]
-             , InputText.view
-                [ InputText.placeholder "2d6 + 3"
-                , InputText.onEnter RollDice
-                , InputText.validation
-                    (\input ->
-                        if Debug.log "test" model.expressionIsValid then
-                            Just input
-
-                        else
-                            Nothing
-                    )
+            [ Container.view
+                [ Container.vertical
+                , Container.pad_4
+                , Container.gap_3
                 ]
-                { onInput = ExpressionChanged, value = model.expression }
-             , Button.view [ Button.primary ] { label = [ text "Roll the dice!" ], onClick = RollDice }
-             ]
-                ++ (model.result |> Maybe.map (\result -> [ Text.view [] [ text result ] ]) |> Maybe.withDefault [])
-            )
+                ([ Heading.view [] [ text "Die Roller" ]
+                 , Container.view [ Container.vertical ]
+                    (InputText.view
+                        [ InputText.placeholder "2d6 + 3"
+                        , InputText.onEnter RollDice
+                        , InputText.validation
+                            (\_ ->
+                                model.expressionError
+                            )
+                        , InputText.minLength 5
+                        ]
+                        { onInput = ExpressionChanged, value = model.expression }
+                        :: (model.expressionError
+                                |> Maybe.map (\message -> Message.view [ Message.danger ] [ Text.view [] [ text message ] ])
+                                |> Maybe.toList
+                           )
+                    )
+                 , Button.view [ Button.primary ] { label = [ text "Roll the dice!" ], onClick = RollDice }
+                 ]
+                    ++ (model.result |> Maybe.map (\result -> Text.view [] [ text result ]) |> Maybe.toList)
+                )
+            ]
         ]
     }
 
 
 type Msg
     = ExpressionChanged String
-    | ExpressionChecked (Result Http.Error ())
+    | ExpressionChecked (Result Http.Error Api.Validation)
     | RollDice
     | DiceRolled (Result Http.Error String)
 
@@ -79,12 +93,20 @@ update msg model =
             ( { model | expression = expression }
             , Http.get
                 { url = UrlBuilder.relative [ "check-expression" ] [ UrlBuilder.string "expression" expression ]
-                , expect = Http.expectWhatever ExpressionChecked
+                , expect = Http.expectJson ExpressionChecked Api.decodeValidation
                 }
             )
 
         ExpressionChecked response ->
-            ( { model | expressionIsValid = Result.isOk response, result = Just "asdf" }, Cmd.none )
+            ( { model
+                | expressionError =
+                    response
+                        |> Result.map .message
+                        |> Result.toMaybe
+                        |> Maybe.join
+              }
+            , Cmd.none
+            )
 
         RollDice ->
             ( model

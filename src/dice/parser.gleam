@@ -11,7 +11,7 @@ pub type ParseError {
 }
 
 pub fn parse_error_message(error: ParseError) -> String {
-  parse_error_kind_message(error.kind) <> " at position " <> int.to_string(error.position)
+  "at position " <> int.to_string(error.position) <> ": " <> parse_error_kind_message(error.kind)
 }
 
 pub type ParseErrorKind {
