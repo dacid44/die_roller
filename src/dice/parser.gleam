@@ -1,23 +1,27 @@
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/string
 import gleam/result
-import gleam/int
+import gleam/string
 
-import dice.{type Sign, type Term, Positive, Negative, negate_if}
+import dice.{type Sign, type Term, Negative, Positive, negate_if}
 
 pub type ParseError {
   ParseError(position: Int, kind: ParseErrorKind)
 }
 
 pub fn parse_error_message(error: ParseError) -> String {
-  "at position " <> int.to_string(error.position) <> ": " <> parse_error_kind_message(error.kind)
+  "at position "
+  <> int.to_string(error.position)
+  <> ": "
+  <> parse_error_kind_message(error.kind)
 }
 
 pub type ParseErrorKind {
   EndOfExpression
   NotADigit
   MissingOperator
+  IncompleteTerm
 }
 
 pub fn parse_error_kind_message(error_kind: ParseErrorKind) -> String {
@@ -25,13 +29,14 @@ pub fn parse_error_kind_message(error_kind: ParseErrorKind) -> String {
     EndOfExpression -> "end of expression reached before it was expected"
     NotADigit -> "a character was expected to be a digit, but was not"
     MissingOperator -> "missing an operator between two terms"
+    IncompleteTerm -> "incomplete term"
   }
 }
 
 type TermParseState {
   ParseStart
   ParseConstant(Int)
-  ParseDie(Int, Int)
+  ParseDie(Int, Option(Int))
 }
 
 fn split_term_head(input: String) -> #(Result(Int, String), String) {
@@ -59,7 +64,7 @@ fn consume_term(
       consume_term(tail, position + 1, terms, sign, ParseConstant(digit))
     ParseStart, Error("") -> Error(ParseError(position, EndOfExpression))
     ParseStart, Error("d") ->
-      consume_term(tail, position + 1, terms, sign, ParseDie(1, 0))
+      consume_term(tail, position + 1, terms, sign, ParseDie(1, None))
     ParseStart, Error(_) -> Error(ParseError(position, NotADigit))
 
     ParseConstant(num), Ok(digit) ->
@@ -72,7 +77,7 @@ fn consume_term(
       )
     ParseConstant(num), Error("") -> finish_terms([dice.Constant(num), ..terms])
     ParseConstant(num), Error("d") ->
-      consume_term(tail, position + 1, terms, sign, ParseDie(num, 0))
+      consume_term(tail, position + 1, terms, sign, ParseDie(num, None))
     ParseConstant(num), Error(_) ->
       consume_expression(
         input,
@@ -92,11 +97,14 @@ fn consume_term(
         position + 1,
         terms,
         sign,
-        ParseDie(count, value * 10 + digit),
+        ParseDie(count, Some(option.unwrap(value, 0) * 10 + digit)),
       )
-    ParseDie(count, value), Error("") ->
+    ParseDie(_, None), Error("") -> Error(ParseError(position, EndOfExpression))
+    ParseDie(count, Some(value)), Error("") ->
       finish_terms([dice.Die(count, value, sign), ..terms])
-    ParseDie(count, value), Error(_) ->
+    ParseDie(count, None), Error(_) ->
+      Error(ParseError(position, IncompleteTerm))
+    ParseDie(count, Some(value)), Error(_) ->
       consume_expression(
         input,
         position,
