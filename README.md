@@ -1,25 +1,9 @@
-# die_roller
+# Die Roller
 
-[![Package Version](https://img.shields.io/hexpm/v/die_roller)](https://hex.pm/packages/die_roller)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/die_roller/)
+A learning project built with a Gleam backend and an Elm frontend.
 
-```sh
-gleam add die_roller
-```
-```gleam
-import die_roller
+## Usage:
+- Install Elm and Gleam
+- Run with `gleam run <expression>` to roll dice from the command line 
+- Run with `gleam run` to use the web UI, at `localhost:3000` by default
 
-pub fn main() {
-  // TODO: An example of the project in use
-}
-```
-
-Further documentation can be found at <https://hexdocs.pm/die_roller>.
-
-## Development
-
-```sh
-gleam run   # Run the project
-gleam test  # Run the tests
-gleam shell # Run an Erlang shell
-```
